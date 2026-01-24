@@ -6,6 +6,7 @@
     "@babel/types": "^7.28.6",
     "acorn": "^8.15.0",
     "escodegen": "^2.1.0",
-    "estraverse": "^5.3.0"
+    "estraverse": "^5.3.0",
+    "minimist": "^1.2.8"
   }
 }
