@@ -4,6 +4,7 @@ const vm = function (A, Q, B) {
     var stack_pointer = 4593
     var instruction_pointer = 4635
     var frame_base_pointer = 4674
+    var frame_base_counter = 4639
     var last_result = 4633
     var exit_flag = 4656
     var current_opcode_handler = 4685
@@ -187,7 +188,7 @@ const vm = function (A, Q, B) {
                     A[stack_pointer] = stack_offset;
                     A[frame_base_pointer] = stack_offset;
                     A[instruction_pointer] = 0;
-                    A[4639] = 0;
+                    A[frame_base_counter] = 0;
                     A[exit_flag] = 0;
                     A[last_result] = undefined;
 
@@ -308,7 +309,7 @@ const vm = function (A, Q, B) {
                     };
                     A[4980] = function () {
                         var Q = readUint16();
-                        A[A[frame_base_pointer] + Q] = ++A[4639];
+                        A[A[frame_base_pointer] + Q] = ++A[frame_base_counter];
                         fetch();
                     };
                     A[4932] = function () {
@@ -919,6 +920,8 @@ const vm = function (A, Q, B) {
                         fetch();
                     };
                 }(D, e));
+
+                //dispatcher
                 var I = D[vm_start + D[instruction_pointer]++];
                 var P = 4783 + I;
                 D[current_opcode_handler] = D[P];
