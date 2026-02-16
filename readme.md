@@ -14,7 +14,7 @@ On January 14, 2026, DataDome began shipping a new VM-based component in their c
 
 ## Deobfuscation
 
-The VM code has been extracted into `vm.js` (available in this repository).
+The VM code has been extracted from the captcha challenge into `vm.js` (available in this repository).
 
 The first step was deobfuscating the script:
 
@@ -279,7 +279,7 @@ The second pass converts each instruction into assembly-like output:
 
 Each line includes:
 - **Address**: Hexadecimal offset in the bytecode
-- **Raw bytes**: The actual bytes making up the instruction (useful for verification)
+- **Raw bytes**: The actual bytes making up the instruction (useful for verification) and idk looks tuff asf
 - **Opcode**: Mnemonic name of the instruction
 - **Arguments**: Decoded operands (register numbers, immediates, jump targets)
 
