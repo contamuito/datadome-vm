@@ -1,24 +1,68 @@
+/**
+ * DataDome VM Disassembler
+ *
+ * A proof-of-concept disassembler for the DataDome JavaScript VM bytecode.
+ * Converts base64-encoded VM bytecode into human-readable assembly instructions.
+ *
+ * Features:
+ * - Decodes all value types (strings, numbers, booleans, etc.)
+ * - Handles XOR-encoded strings with UTF-8 support
+ * - Generates labels for jump targets
+ * - Special handling for complex opcodes (closures, multi-push, etc.)
+ * - Formats output with addresses and raw bytes for analysis
+ *
+ * Usage:
+ *   node disasm.js <bytecode_file> [max_instructions]
+ *   echo "base64data" | node disasm.js -
+ */
+
 const fs = require('fs');
 
-// VM Constants
-const VM_START = 5258;
-const OPCODE_BASE = 4783;
+// VM Constants - Memory offsets in the VM's unified array
+const VM_START = 5258;      // Starting offset of bytecode in VM memory
+const OPCODE_BASE = 4783;   // Base offset where opcode handlers are stored
 
-// Value type markers
-const VAL_TRUE = 40;      // 0x28
-const VAL_FALSE = 125;    // 0x7D
-const VAL_NULL = 76;      // 0x4C
-const VAL_UNDEFINED = 61; // 0x3D
-const VAL_STRING = 103;   // 0x67 - XOR encoded string
-const VAL_UTF8 = 39;      // 0x27 - UTF-8 XOR encoded string
-const VAL_FLOAT64 = 5;    // 0x05
-const VAL_INT32 = 84;     // 0x54
-const VAL_INT24 = 101;    // 0x65
-const VAL_INT16 = 97;     // 0x61
-const VAL_INT8 = 111;     // 0x6F
+/**
+ * Value Type Markers
+ *
+ * The VM encodes immediate values in bytecode using type markers.
+ * Each marker byte indicates how to decode the following bytes.
+ *
+ * Small integers (0-127) are encoded with the high bit set: 0x80 | value
+ * Other types use specific marker bytes followed by their data.
+ */
+const VAL_TRUE = 40;      // 0x28 - Boolean true (no additional bytes)
+const VAL_FALSE = 125;    // 0x7D - Boolean false (no additional bytes)
+const VAL_NULL = 76;      // 0x4C - null value (no additional bytes)
+const VAL_UNDEFINED = 61; // 0x3D - undefined value (no additional bytes)
+const VAL_STRING = 103;   // 0x67 - XOR-encoded ASCII string (null-terminated)
+const VAL_UTF8 = 39;      // 0x27 - XOR-encoded UTF-8 string (null-terminated)
+const VAL_FLOAT64 = 5;    // 0x05 - IEEE 754 double (8 bytes)
+const VAL_INT32 = 84;     // 0x54 - Signed 32-bit integer (4 bytes, big-endian)
+const VAL_INT24 = 101;    // 0x65 - Signed 24-bit integer (3 bytes, big-endian)
+const VAL_INT16 = 97;     // 0x61 - Signed 16-bit integer (2 bytes, big-endian)
+const VAL_INT8 = 111;     // 0x6F - Signed 8-bit integer (1 byte)
 
-// Opcode definitions: [name, argFormat]
-// argFormat: 'u16' = uint16, 'u8' = uint8, 'val' = getValue, combinations like 'u16,u16'
+/**
+ * Opcode Definitions
+ *
+ * Maps opcode bytes to [name, argFormat] pairs.
+ * The opcode number corresponds to the handler offset: OPCODE_BASE + opcode
+ *
+ * Argument format notation:
+ *   'u8'     - Unsigned 8-bit integer
+ *   'u16'    - Unsigned 16-bit integer (big-endian)
+ *   'val'    - Immediate value (type-tagged, decoded by readValue())
+ *   'u8*'    - Variable number of u8 values
+ *   'val*'   - Variable number of immediate values
+ *   'jmp'    - Jump offset (used in CLOSURE)
+ *   Multiple args separated by commas: 'u16,u16' or 'u16,val'
+ *
+ * Stack notation (where used in comments):
+ *   TOS = Top of Stack
+ *   POP = Remove from stack
+ *   PUSH = Add to stack
+ */
 const OPCODES = {
     0:   ['POP_N', 'u16'],                    // 4783: stack_pointer -= n
     1:   ['RET_LOCAL', 'u16'],                // 4784: return frame local
@@ -123,11 +167,19 @@ const OPCODES = {
     254: ['GET_PUSH_IMM', 'val'],             // 5037: GET then push imm
 };
 
+/**
+ * Disassembler Class
+ *
+ * Main disassembler that converts raw VM bytecode into assembly-like output.
+ * Performs two passes:
+ *   1. Label discovery pass - finds all jump targets
+ *   2. Disassembly pass - converts opcodes to readable instructions
+ */
 class Disassembler {
     constructor(bytecode) {
         this.bytecode = bytecode;
-        this.ip = 0;
-        this.labels = new Set();
+        this.ip = 0;                // Instruction pointer (current position in bytecode)
+        this.labels = new Set();    // Set of addresses that are jump targets
     }
 
     readUint8() {
@@ -140,14 +192,22 @@ class Disassembler {
         return (hi << 8) | lo;
     }
 
-    // Decode a value from the bytecode
+    /**
+     * Decode a type-tagged immediate value from bytecode
+     *
+     * The VM uses a type-marker system where the first byte indicates
+     * the type and encoding of the following data.
+     *
+     * @returns {Object} {type: string, value: any, raw?: boolean}
+     */
     readValue() {
         const marker = this.readUint8();
 
+        // Small integers (0-127) are encoded directly with high bit set
         if (marker & 0x80) {
             return { type: 'int', value: marker & 0x7F };
         }
-
+        //tbh just stole this from the vm and let claude label it 🤷
         switch (marker) {
             case VAL_TRUE:
                 return { type: 'bool', value: true };
@@ -158,7 +218,8 @@ class Disassembler {
             case VAL_UNDEFINED:
                 return { type: 'undefined', value: undefined };
             case VAL_STRING: {
-                // XOR-encoded string
+                // XOR-encoded ASCII string (null-terminated)
+                // XOR key starts at 183 and increments for each byte
                 let str = '';
                 let xorKey = 183;
                 let ch;
@@ -168,14 +229,15 @@ class Disassembler {
                 return { type: 'string', value: str };
             }
             case VAL_UTF8: {
-                // UTF-8 XOR-encoded string
+                // XOR-encoded UTF-8 string (null-terminated)
+                // XOR key starts at 46 and increments for each byte
                 let xorKey = 46;
                 const bytes = [];
                 let b;
                 while ((b = this.readUint8() ^ (xorKey++ & 0xFF)) !== 0) {
                     bytes.push(b);
                 }
-                // Decode UTF-8
+                // Decode UTF-8 byte sequence to JavaScript string
                 let str = '';
                 for (let i = 0; i < bytes.length; ) {
                     const b0 = bytes[i++];
@@ -200,16 +262,19 @@ class Disassembler {
                 return { type: 'string', value: str };
             }
             case VAL_FLOAT64: {
-                // 8 bytes IEEE 754 double
+                // IEEE 754 double-precision float (8 bytes, big-endian)
                 const bytes = [];
                 for (let i = 0; i < 8; i++) {
                     bytes.push(this.readUint8());
                 }
+                // Extract sign, exponent, and mantissa
                 const sign = (bytes[0] >> 7) ? -1 : 1;
                 const exp = ((bytes[0] & 127) << 4) | ((bytes[1] >> 4) & 15);
+                // Handle special values (NaN, Infinity)
                 if (exp === 2047) {
                     return bytes[7] & 1 ? { type: 'float', value: NaN } : { type: 'float', value: sign * Infinity };
                 }
+                // Calculate mantissa from the 52 fractional bits
                 let mantissa = 1;
                 for (let d = 0; d <= 52; d++) {
                     const bitPos = d + 12;
@@ -250,6 +315,11 @@ class Disassembler {
         }
     }
 
+    /**
+     * Format a decoded value for display in disassembly
+     * @param {Object} val - Value object from readValue()
+     * @returns {string} Formatted string representation
+     */
     formatValue(val) {
         if (val.raw) return `0x${val.value.toString(16)}`;
         switch (val.type) {
@@ -269,7 +339,13 @@ class Disassembler {
         }
     }
 
-    // First pass: find all jump targets
+    /**
+     * First pass: Scan bytecode to find all jump targets
+     *
+     * This creates labels for any address that is the target of a jump,
+     * making the disassembly output easier to follow. Labels are named
+     * L_<hex_address> (e.g., L_0042 for address 0x42).
+     */
     findLabels() {
         const savedIp = this.ip;
         this.ip = 0;
@@ -317,9 +393,9 @@ class Disassembler {
                 }
             }
 
-            // Special handling for CLOSURE
+            // Special handling for CLOSURE opcode
+            // Closures contain a jump offset to skip over the function body
             if (name === 'CLOSURE') {
-                // Reset to read properly
                 this.ip = addr + 1;
                 const numLocals = this.readUint8();
                 const numCaptures = this.readUint8();
@@ -328,6 +404,7 @@ class Disassembler {
                 }
                 const skipBytes = this.readUint16();
                 const bodyStart = this.ip + 1;
+                // Label both the function body start and end
                 this.labels.add(bodyStart);
                 this.labels.add(bodyStart + skipBytes);
                 this.ip = bodyStart;
@@ -337,16 +414,31 @@ class Disassembler {
         this.ip = savedIp;
     }
 
+    /**
+     * Disassemble a single instruction at the current IP
+     *
+     * Output format:
+     *   [label:]
+     *   address:  raw_bytes (hex)    OPCODE arg1, arg2, ...
+     *
+     * Example:
+     *   L_0042:
+     *   000042:  fa 00 0a           PUSH_IMM 10
+     *
+     * @returns {string} Formatted disassembly line
+     */
     disassembleOne() {
         const addr = this.ip;
         const opcode = this.readUint8();
         const def = OPCODES[opcode];
 
+        // Add label if this address is a jump target
         let label = '';
         if (this.labels.has(addr)) {
             label = `L_${addr.toString(16).padStart(4, '0')}:\n`;
         }
 
+        // Unknown opcode
         if (!def) {
             return `${label}${addr.toString(16).padStart(6, '0')}:  ${opcode.toString(16).padStart(2, '0')}              UNK_${opcode}`;
         }
@@ -358,7 +450,8 @@ class Disassembler {
         if (format && format.length > 0) {
             const parts = format.split(',');
 
-            // Special handling for CLOSURE
+            // Special handling for CLOSURE opcode
+            // Format: CLOSURE locals, captures, [capture_indices...], skip_offset
             if (name === 'CLOSURE') {
                 const numLocals = this.readUint8();
                 rawBytes.push(numLocals);
@@ -382,7 +475,8 @@ class Disassembler {
                 args.push(`body=L_${bodyAddr.toString(16).padStart(4, '0')}`);
                 args.push(`end=L_${(bodyAddr + skipBytes).toString(16).padStart(4, '0')}`);
             }
-            // Special handling for PUSH_MULTI_IMM
+            // Special handling for PUSH_MULTI_IMM opcode
+            // Pushes multiple immediate values onto the stack
             else if (name === 'PUSH_MULTI_IMM') {
                 const count = this.readUint8();
                 rawBytes.push(count);
@@ -402,7 +496,8 @@ class Disassembler {
                         rawBytes.push(hi, lo);
                         const val = (hi << 8) | lo;
 
-                        // Format jump targets as labels
+                        // Format jump targets as labels (relative to end of instruction)
+                        // Instruction ends at: addr + 1 (opcode) + 2 (u16) = addr + 3
                         if (name === 'JMP_FWD' || name === 'JNZ_KEEP' || name === 'JZ_KEEP') {
                             args.push(`L_${(addr + 3 + val).toString(16).padStart(4, '0')}`);
                         } else if (name === 'JMP_BACK') {
@@ -428,6 +523,7 @@ class Disassembler {
             }
         }
 
+        // Format output line
         const addrStr = addr.toString(16).padStart(6, '0');
         const bytesStr = rawBytes.slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join(' ');
         const argsStr = args.length > 0 ? ' ' + args.join(', ') : '';
@@ -435,6 +531,16 @@ class Disassembler {
         return `${label}${addrStr}:  ${bytesStr.padEnd(24)} ${name}${argsStr}`;
     }
 
+    /**
+     * Disassemble the entire bytecode (or up to maxInstructions)
+     *
+     * Performs two passes:
+     * 1. Label discovery (findLabels)
+     * 2. Instruction disassembly
+     *
+     * @param {number} maxInstructions - Maximum number of instructions to disassemble
+     * @returns {string} Complete disassembly output
+     */
     disassemble(maxInstructions = Infinity) {
         this.findLabels();
         this.ip = 0;
@@ -455,40 +561,63 @@ class Disassembler {
     }
 }
 
-// Main
+/**
+ * Main entry point
+ *
+ * Usage:
+ *   node disasm.js bytecode.txt              - Disassemble from file
+ *   node disasm.js bytecode.txt 100          - Disassemble first 100 instructions
+ *   echo "base64..." | node disasm.js -      - Disassemble from stdin
+ *
+ * The input should be base64-encoded VM bytecode. This is typically
+ * extracted from the DataDome VM's initialization code.
+ */
 function main() {
     const args = process.argv.slice(2);
 
     if (args.length === 0) {
-        console.log('Usage: node disassembler.js <bytecode_file> [max_instructions]');
+        console.log('Usage: node disasm.js <bytecode_file> [max_instructions]');
         console.log('');
-        console.log('The bytecode_file should contain base64-encoded VM bytecode.');
-        console.log('You can also pipe base64 data: echo "base64data" | node disassembler.js -');
+        console.log('Arguments:');
+        console.log('  bytecode_file      Path to file containing base64-encoded bytecode, or "-" for stdin');
+        console.log('  max_instructions   Optional limit on number of instructions to disassemble');
+        console.log('');
+        console.log('Examples:');
+        console.log('  node disasm.js bytecode.txt');
+        console.log('  node disasm.js bytecode.txt 50');
+        console.log('  echo "base64data..." | node disasm.js -');
         process.exit(1);
     }
 
     let base64Data;
     const maxInstructions = args[1] ? parseInt(args[1]) : Infinity;
 
+    // Read input from file or stdin
     if (args[0] === '-') {
-        // Read from stdin
         base64Data = fs.readFileSync(0, 'utf8').trim();
     } else {
         base64Data = fs.readFileSync(args[0], 'utf8').trim();
     }
 
-    // Decode base64
+    // Decode base64 to raw bytes
     const decoded = Buffer.from(base64Data, 'base64');
-
-    // The bytecode is at the beginning of the decoded data
     const bytecode = new Uint8Array(decoded);
 
+    // Output header with metadata
+    console.log(`; DataDome VM Disassembly`);
     console.log(`; Bytecode size: ${bytecode.length} bytes`);
     console.log(`; VM Constants: VM_START=${VM_START}, OPCODE_BASE=${OPCODE_BASE}`);
     console.log('');
 
+    // Disassemble and output
     const disasm = new Disassembler(bytecode);
     console.log(disasm.disassemble(maxInstructions));
 }
 
-main();
+// Run if executed directly
+if (require.main === module) {
+    main();
+}
+
+// Export for use as a library
+module.exports = { Disassembler, OPCODES, VM_START, OPCODE_BASE };
