@@ -132,3 +132,37 @@ The VM function wraps its execution in a `try/finally` block and returns a struc
 - **`r`:** The Base64URL encrypted telemetry payload sent in the HTTP challenge verification request.
 - **`i`:** Total instructions executed in the VM loop (used as a proof-of-work and anti-tamper metric).
 - **`t`:** Execution elapsed time in milliseconds (`performance.now() - startTime | 0`).
+
+---
+
+## 6. Research Tooling & Standalone Utilities
+
+This repository provides working tools developed to analyze, disassemble, decrypt, and execute the VM:
+
+### 6.1 `disasm_improved.js` (Fixed Bytecode Disassembler)
+Disassembles `bytecode.bin` with 100% accuracy and 0 unknown opcodes across 31,437 instructions. Corrects the `CLOSURE` offset reading bug and bounds all 117 internal closures.
+```bash
+node disasm_improved.js bytecode.bin > out_improved.txt
+```
+
+### 6.2 `datadome_decryptor.py` (Offline Payload Decryptor)
+Extracts the 147 raw telemetry bytes from any captured DataDome `r` token using the static 256-byte S-Box (`sbox.json`).
+```bash
+python3 datadome_decryptor.py "<token_r>"
+# Or as JSON:
+python3 datadome_decryptor.py "<token_r>" --json
+```
+
+### 6.3 `callgraph_extractor.py` (Function Slicer & Call Graph Analyzer)
+Scans the disassembled bytecode, isolates all 117 closures, extracts parameter counts, variable captures, referenced strings, and outputs a complete graph to `call_graph.json`.
+```bash
+python3 callgraph_extractor.py
+```
+
+### 6.4 `standalone_runner.js` (Zero-Browser Clean-Room Runner)
+Executes the VM in Node.js (~60-100ms) with a genuine CSS Box-Model simulation (`clientWidth` calculation) and sanitized `Error.stack` frames to generate valid tokens without opening Chromium.
+```bash
+node standalone_runner.js
+# Or pipe directly to the decryptor:
+node standalone_runner.js --json | jq -r .token_r | python3 datadome_decryptor.py
+```

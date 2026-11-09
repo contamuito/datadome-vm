@@ -373,10 +373,12 @@ This output format makes it possible to:
 
 For a full breakdown of the VM internals, telemetry checks, cryptographic serialization, and the fix for the CLOSURE alignment bug, see **[RESEARCH_FINDINGS.md](RESEARCH_FINDINGS.md)**.
 
-### Summary of New Discoveries:
-1. **CLOSURE Bug Fixed:** `disasm.js` previously treated `CLOSURE` as reading a skip offset, swallowing `JMP_FWD` instructions and generating 79 false `UNK_` opcodes. With `disasm_improved.js`, the entire bytecode disassembles with **0 unknown opcodes**.
-2. **Telemetry Payload Extraction:** The VM compiles 147 bytes of environmental telemetry into `reg[318]` before passing it to an in-VM XOR stream cipher, applying Base64 encoding and URL-safe substitution.
-3. **Detection Techniques Identified:**
+### Summary of New Discoveries & Tools:
+1. **CLOSURE Bug Fixed:** `disasm.js` previously treated `CLOSURE` as reading a skip offset, swallowing `JMP_FWD` instructions and generating 79 false `UNK_` opcodes. With `disasm_improved.js`, the entire bytecode disassembles with **0 unknown opcodes** across 31,437 instructions.
+2. **Offline Payload Decryptor (`datadome_decryptor.py`):** Decrypts the 147-byte telemetry buffer from any captured Base64URL `r` token using the static 256-byte S-Box (`sbox.json`).
+3. **Function Slicer & Call Graph (`callgraph_extractor.py`):** Extracts all 117 internal VM closures with parameter counts, captures, and referenced strings into `call_graph.json`.
+4. **Clean-Room Standalone Runner (`standalone_runner.js`):** Runs the VM in pure Node.js in ~60ms with sanitized `Error.stack` frames and authentic CSS Box-Model simulation.
+5. **Detection Techniques Identified:**
    - Error stack-trace analysis (`new Error().stack`) to detect hooks and execution context tampering.
    - CSS box-model micro-benchmarks (`content-box` `div` clientWidth validation) to identify headless browsers lacking genuine layout rendering.
    - High-resolution timing deltas (`performance.now()`, `Date.now()`) cross-referenced against VM instruction cycles.
