@@ -369,6 +369,20 @@ This output format makes it possible to:
 
 ---
 
+## Further Research: Inside the VM & Disassembler Fixes
+
+For a full breakdown of the VM internals, telemetry checks, cryptographic serialization, and the fix for the CLOSURE alignment bug, see **[RESEARCH_FINDINGS.md](RESEARCH_FINDINGS.md)**.
+
+### Summary of New Discoveries:
+1. **CLOSURE Bug Fixed:** `disasm.js` previously treated `CLOSURE` as reading a skip offset, swallowing `JMP_FWD` instructions and generating 79 false `UNK_` opcodes. With `disasm_improved.js`, the entire bytecode disassembles with **0 unknown opcodes**.
+2. **Telemetry Payload Extraction:** The VM compiles 147 bytes of environmental telemetry into `reg[318]` before passing it to an in-VM XOR stream cipher, applying Base64 encoding and URL-safe substitution.
+3. **Detection Techniques Identified:**
+   - Error stack-trace analysis (`new Error().stack`) to detect hooks and execution context tampering.
+   - CSS box-model micro-benchmarks (`content-box` `div` clientWidth validation) to identify headless browsers lacking genuine layout rendering.
+   - High-resolution timing deltas (`performance.now()`, `Date.now()`) cross-referenced against VM instruction cycles.
+
+---
+
 ## Notes
 
 I'm still pretty new to VMs so take everything with a grain of salt. AI has been used to help document the code and write parts of this readme (because writing docs is painful).
